@@ -1,0 +1,47 @@
+{
+  "name": "celtic-heroes-timer",
+  "version": "1.0.0",
+  "description": "Celtic Heroes Boss Timer desktop app",
+  "main": "main.js",
+  "author": "YOU",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "publish": "electron-builder --publish always"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.0.0",
+    "electron-updater": "^6.1.0",
+    "electron-log": "^5.1.2"
+  },
+  "build": {
+    "appId": "com.yourname.celticheroestimer",
+    "productName": "Celtic Heroes Timer",
+    "directories": { "buildResources": "build" },
+    "files": [
+      "main.js",
+      "boss-timers.html",
+      "node_modules/**",
+      "!**/.git/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "CelticHeroesTimer-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "YOUR_GITHUB_USERNAME",
+        "repo": "celtic-heroes-timer"
+      }
+    ]
+  }
+}

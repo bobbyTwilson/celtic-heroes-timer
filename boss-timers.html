@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Celtic Heroes Boss Timer — Sync</title>
+  <style>
+    :root { --bg:#0f1220;--card:#171a2b;--muted:#aab3cf;--text:#e8ecff;--accent:#7aa2ff;--good:#22c55e;--warn:#f59e0b;--bad:#ef4444; }
+    *{box-sizing:border-box} html,body{height:100%}
+    body{
+      margin:0;
+      background:radial-gradient(1200px 600px at 10% -10%,#1b2250 0%,transparent 60%),
+               linear-gradient(180deg,#0b0e1a,#0f1220 30% 70%,#0b0e1a);
+      color:var(--text);
+      font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,"Helvetica Neue",Arial;
+    }
+    .app{max-width:1200px;margin:auto;padding:24px}
+    h1{margin:0 0 8px;font-size:28px}
+    .sub{color:var(--muted);margin-bottom:20px}
+    .toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px}
+    .btn{background:#26325f;color:#eaf0ff;border:1px solid #31407a;padding:10px 14px;border-radius:12px;cursor:pointer}
+    .btn:hover{filter:brightness(1.06)} .btn.ghost{background:transparent}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+    .card{background:linear-gradient(180deg,#171a2b,#15182a);border:1px solid #242946;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+    .card-header{display:flex;gap:12px;align-items:center;padding:14px;border-bottom:1px solid #242946}
+    .imgwrap{height:56px;width:56px;border-radius:12px;overflow:hidden;background:#0c0f1f;border:1px solid #283052;display:flex;align-items:center;justify-content:center}
+    .imgwrap img{width:100%;height:100%;object-fit:cover}
+    .title{flex:1}
+    .title input{width:100%;background:transparent;border:none;color:var(--text);font-size:16px;font-weight:700}
+    .title input:focus{outline:2px solid #33406f;border-radius:6px;padding:2px}
+    .timer{padding:14px;display:grid;gap:10px}
+    .row{display:flex;gap:10px;align-items:center}
+    input[type="number"],input[type="text"]{background:#0e1328;color:var(--text);border:1px solid #2a335c;border-radius:10px;padding:8px}
+    .progress{height:10px;background:#0d1122;border:1px solid #232a4a;border-radius:999px;overflow:hidden}
+    .bar{height:100%;width:0%;background:linear-gradient(90deg,#6ea8ff,#b388ff);transition:width .25s linear}
+    .time{font:700 18px/1.2 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace}
+    .badge{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid #33406f;background:#0c122b;color:#b7c3ff}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .danger{background:#2a0e15;border-color:#5c2230;color:#ffd7df}
+    .pill{background:#0e152e;border:1px dashed #2c3b77;color:#c7d2ff;padding:10px;border-radius:12px}
+    .empty{opacity:.7;text-align:center;padding:24px 14px}
+    .footer{margin-top:18px;color:var(--muted);font-size:13px}
+    .hidden{display:none}
+    .sync{display:flex;gap:8px;align-items:center}
+    .status{font-size:12px;color:var(--muted)}
+    .status.err{color:#fda4af} .status.live{color:#86efac}
+  </style>
+
+  <!-- Firebase CDN (compat build for plain HTML/Electron) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.1/firebase-firestore-compat.js"></script>
+</head>
+
+<body>
+  <div class="app">
+    <h1>CH Boss Timers <span class="status" id="syncStatus">(Local)</span></h1>
+    <div class="sub">Share a room code with your friend to sync timers in real time. Works locally without sync, too. 🔁</div>
+
+    <div class="toolbar">
+      <button class="btn" id="addBoss">➕ Add Boss</button>
+      <label class="pill"><input type="checkbox" id="soundToggle" /> Enable chime on finish</label>
+      <label class="pill"><input type="checkbox" id="notifyToggle" /> Desktop notification on finish</label>
+      <div class="pill sync">
+        <input id="roomInput" type="text" placeholder="Room code (e.g. HIVE)" />
+        <button class="btn" id="joinRoom">Join / Create Room</button>
+        <button class="btn ghost" id="leaveRoom">Leave</button>
+      </div>
+      <button class="btn ghost" id="exportBtn">⬇️ Export</button>
+      <input type="file" id="importFile" accept="application/json" class="hidden" />
+      <button class="btn ghost" id="importBtn">⬆️ Import</button>
+      <button class="btn ghost" id="resetAll">🧹 Reset all</button>
+    </div>
+
+    <div id="cards" class="grid"></div>
+    <div id="empty" class="empty">No bosses yet. Click <b>Add Boss</b> to create your first timer.</div>
+
+    <div class="footer">
+      Tip: drag & drop an image onto any card, or click the picture to upload. Duration is in minutes. Timers keep counting even if you close the tab.
+      <br><b>Sync notes:</b> We merge per-boss by <code>updatedAt</code> so newer edits (like images) win.
+    </div>
+  </div>
+
+  <audio id="ding" preload="auto">
+    <source
+      src="data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQAAACAAACAgAAACAAACcQAAACAAACAgAAAAQAAAJxAAAAIAAAICAAAAAgAAAJxAAAAgAAAgIAAAAEAAACcQAAACAAACAgAAAAgAAAJxAAAAgAAAgIAAAAB"
+      type="audio/mp3">
+  </audio>
+  <input type="file" id="imagePicker" accept="image/*" class="hidden" />
+
+  <script>
+  window.addEventListener('DOMContentLoaded', () => {
+    /* ---------- Firebase setup (compat) ---------- */
+    const firebaseConfig = {
+      apiKey: "AIzaSyB3DsOnF0qvpTKz4igDEMPBkAtevVhxSjk",
+      authDomain: "celticheroestimers.firebaseapp.com",
+      projectId: "celticheroestimers",
+      storageBucket: "celticheroestimers.firebasestorage.app",
+      messagingSenderId: "20299987403",
+      appId: "1:20299987403:web:47a8b301f08ce7ce13de4e",
+      measurementId: "G-PMY6DWY7LG"
+    };
+
+    let db = null;
+    try { firebase.initializeApp(firebaseConfig); db = firebase.firestore(); }
+    catch (e) { console.error("Firebase init error:", e); setTimeout(() => setStatus("(Local — Firebase init failed)","err"), 0); }
+
+    /* ---------- Utilities & state ---------- */
+    const $ = sel => document.querySelector(sel);
+    function uuid(){ try { return (crypto && crypto.randomUUID) ? crypto.randomUUID() : 'id-' + Math.random().toString(36).slice(2); } catch { return 'id-' + Math.random().toString(36).slice(2); } }
+    const pad = n => String(n).padStart(2,'0');
+    const fmt = ms => { if(ms<0) ms=0; const s=Math.floor(ms/1000); const h=Math.floor(s/3600); const m=Math.floor((s%3600)/60); const ss=s%60; return `${pad(h)}:${pad(m)}:${pad(ss)}`; };
+    const now = () => Date.now();
+    function markUpdated(b){ b.updatedAt = Date.now(); }
+
+    let state = JSON.parse(localStorage.getItem('ch-boss-timers')) || { bosses:[], settings:{} };
+    function persist(){ localStorage.setItem('ch-boss-timers', JSON.stringify(state)); maybePushToCloud(); }
+
+    if(!state.bosses.length){
+      const seeds = ['Gold Mob','Warden Boss','Meteoric Boss','Frozen Boss','Dragonlord','Exalted Dragonlord'];
+      state.bosses = seeds.map((n,i)=>({
+        id: uuid(), name:n, minutes:[5,15,30,60,90,120][i],
+        image:'', running:false, endAt:0, lastDurationMs:0, updatedAt: Date.now()
+      }));
+      persist();
+    }
+
+    /* ---------- Firestore sync ---------- */
+    let roomId = null, unsub = null, debounce = null;
+
+    function setStatus(text, cls){
+      const el = $('#syncStatus');
+      el.textContent = text;
+      el.classList.remove('err','live');
+      if (cls) el.classList.add(cls);
+    }
+
+    function connectRoom(id){
+      if (!db) { alert("Firebase isn't initialized (offline or config issue). You'll still have local timers."); return; }
+      if (unsub) { try { unsub(); } catch {} unsub = null; }
+
+      roomId = id.trim(); if (!roomId) return;
+      const ref = db.collection('rooms').doc(roomId);
+      setStatus(`(Room: ${roomId} — connecting...)`);
+
+      // Ensure doc exists
+      ref.get().then(snap => {
+        if (!snap.exists) {
+          return ref.set({ bosses: state.bosses, settings: state.settings, updatedAt: Date.now() })
+                    .then(() => setStatus(`(Room: ${roomId} — creator)`, "live"));
+        } else {
+          setStatus(`(Room: ${roomId} — live)`, "live");
+        }
+      }).catch(err => { console.error('Initial room create/check failed:', err); setStatus(`(Room: ${roomId} — error)`, "err"); });
+
+      // Listener with per-boss newer-wins merge
+      unsub = ref.onSnapshot(
+        snap => {
+          const data = snap.data(); if (!data) return;
+          const localMap = new Map(state.bosses.map(x => [x.id, x]));
+          const merged = [];
+
+          for (const cb of (data.bosses || [])) {
+            const lb = localMap.get(cb.id);
+            if (!lb) merged.push(cb);
+            else { merged.push(((cb.updatedAt||0) > (lb.updatedAt||0)) ? cb : lb); localMap.delete(cb.id); }
+          }
+          for (const [, lb] of localMap) merged.push(lb);
+
+          state.bosses = merged;
+          if (data.settings) state.settings = data.settings;
+
+          localStorage.setItem('ch-boss-timers', JSON.stringify(state));
+          render();
+          setStatus(`(Room: ${roomId} — live)`, "live");
+        },
+        err => { console.error('onSnapshot error:', err); setStatus(`(Room: ${roomId} — error)`, "err"); }
+      );
+
+      // Presence ping
+      ref.set({ updatedAt: Date.now() }, { merge: true }).catch(err => console.error('Presence push failed:', err));
+    }
+
+    function leaveRoom(){ if (unsub) { try { unsub(); } catch {} unsub = null; } roomId = null; setStatus("(Local)"); }
+
+    function pushToCloud(){
+      if (!db || !roomId) return;
+      const ref = db.collection('rooms').doc(roomId);
+      ref.set({ bosses: state.bosses, settings: state.settings, updatedAt: Date.now() }, { merge: true })
+         .catch(err => console.error('pushToCloud error:', err));
+    }
+
+    function maybePushToCloud(){ if (!db || !roomId) return; clearTimeout(debounce); debounce = setTimeout(pushToCloud, 250); }
+
+    /* ---------- UI Rendering ---------- */
+    const cards = $('#cards'), empty = $('#empty');
+
+    function render(){
+      cards.innerHTML = '';
+      empty.style.display = state.bosses.length ? 'none' : 'block';
+      state.bosses.forEach(b => cards.appendChild(renderCard(b)));
+      $('#soundToggle').checked = !!state.settings.sound;
+      $('#notifyToggle').checked = !!state.settings.notify;
+    }
+
+    function renderCard(b){
+      const card = document.createElement('div'); card.className='card'; card.dataset.id=b.id;
+
+      const head = document.createElement('div'); head.className='card-header';
+      const imgwrap = document.createElement('div'); imgwrap.className='imgwrap';
+      const img = document.createElement('img'); img.alt=b.name; img.src=b.image || placeholder(b.name); imgwrap.appendChild(img);
+      head.appendChild(imgwrap);
+
+      const title = document.createElement('div'); title.className='title';
+      const nameInput = document.createElement('input'); nameInput.value=b.name; title.appendChild(nameInput); head.appendChild(title);
+
+      const badge = document.createElement('span'); badge.className='badge'; badge.textContent=b.running?'Running':'Idle'; head.appendChild(badge);
+
+      const timer = document.createElement('div'); timer.className='timer';
+      const row = document.createElement('div'); row.className='row';
+
+      const minSel = document.createElement('input'); minSel.type='number'; minSel.min=1; minSel.max=720; minSel.value=b.minutes; row.appendChild(minSel);
+      const remain = document.createElement('div'); remain.className='time';
+      remain.textContent = b.running ? fmt(b.endAt - now()) : fmt(b.minutes*60*1000);
+      row.appendChild(remain);
+      timer.appendChild(row);
+
+      const progress = document.createElement('div'); progress.className='progress';
+      const bar = document.createElement('div'); bar.className='bar'; progress.appendChild(bar);
+      timer.appendChild(progress);
+
+      const controls = document.createElement('div'); controls.className='controls';
+      const startBtn = document.createElement('button'); startBtn.className='btn'; startBtn.textContent=b.running?'Pause':'Start';
+      const resetBtn = document.createElement('button'); resetBtn.className='btn danger'; resetBtn.textContent='Reset';
+      const delBtn = document.createElement('button'); delBtn.className='btn ghost'; delBtn.textContent='Delete';
+      controls.append(startBtn, resetBtn, delBtn);
+      timer.appendChild(controls);
+
+      card.append(head, timer);
+
+      // interactions
+      imgwrap.onclick = () => pickImage(b.id);
+      card.addEventListener('dragover', e=>{ e.preventDefault(); imgwrap.style.outline='2px dashed #6ea8ff'; });
+      card.addEventListener('dragleave', ()=>{ imgwrap.style.outline='none'; });
+      card.addEventListener('drop', e=>{
+        e.preventDefault(); imgwrap.style.outline='none';
+        const f = [...e.dataTransfer.files].find(f=>f.type.startsWith('image/'));
+        if(!f) return; const r=new FileReader();
+        r.onload = ()=>{
+          b.image = r.result; markUpdated(b);
+          persist(); render(); pushToCloud(); // immediate so your image wins
+        };
+        r.readAsDataURL(f);
+      });
+
+      nameInput.oninput = () => { b.name = nameInput.value; markUpdated(b); persist(); };
+      minSel.oninput = () => {
+        b.minutes = Math.max(1, Math.min(720, parseInt(minSel.value||'1')));
+        if(!b.running){ remain.textContent = fmt(b.minutes*60*1000); bar.style.width='0%'; }
+        markUpdated(b); persist();
+      };
+
+      startBtn.onclick = () => {
+        if(!b.running){
+          const dur = b.lastDurationMs || b.minutes*60*1000;
+          b.endAt = now() + dur;
+          b.lastDurationMs = dur;
+          b.running = true; badge.textContent='Running'; startBtn.textContent='Pause';
+        } else {
+          const left = Math.max(0, b.endAt - now());
+          b.running = false; b.lastDurationMs = left; badge.textContent='Idle'; startBtn.textContent='Start';
+        }
+        markUpdated(b); persist();
+      };
+
+      resetBtn.onclick = () => {
+        b.running=false; b.endAt=0; b.lastDurationMs=0; badge.textContent='Idle'; startBtn.textContent='Start';
+        remain.textContent = fmt(b.minutes*60*1000); bar.style.width='0%';
+        markUpdated(b); persist();
+      };
+
+      delBtn.onclick = () => {
+        if(confirm(`Delete ${b.name}?`)){
+          state.bosses = state.bosses.filter(x=>x.id!==b.id);
+          persist(); render(); pushToCloud(); // immediate remove in cloud
+        }
+      };
+
+      // animation loop hook
+      card._update = () => {
+        const duration = b.running ? (b.lastDurationMs || b.minutes*60*1000) : (b.lastDurationMs || b.minutes*60*1000);
+        const total = b.running ? (b.endAt - (b.endAt - duration)) : duration;
+        const left = b.running ? Math.max(0, b.endAt - now()) : duration;
+
+        remain.textContent = fmt(left);
+        bar.style.width = Math.min(100, Math.max(0, 100*(1 - left/total))) + '%';
+
+        if(b.running && left<=0){
+          b.running=false; b.endAt=0; b.lastDurationMs=0; badge.textContent='Ready'; startBtn.textContent='Start';
+          if(state.settings.sound) $('#ding').play().catch(()=>{});
+          if(state.settings.notify && 'Notification' in window && Notification.permission==='granted'){
+            new Notification(`${b.name} has respawned!`);
+          }
+          markUpdated(b); persist();
+        }
+      };
+
+      return card;
+    }
+
+    function placeholder(name){
+      const emojis=['🐉','⚔️','🛡️','💎','🔥','👑','🧊','☠️','🪙','🧿'];
+      let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))|0;
+      const e = emojis[Math.abs(h)%emojis.length];
+      return `data:image/svg+xml;utf8,${
+        encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><rect width='100%' height='100%' fill='%230c0f1f'/><text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle' font-size='72'>"+e+"</text></svg>")
+      }`;
+    }
+
+    function pickImage(id){
+      const input = $('#imagePicker');
+      input.onchange = e => {
+        const f = e.target.files?.[0]; if(!f) return;
+        const r = new FileReader();
+        r.onload = ()=>{
+          const b = state.bosses.find(x=>x.id===id); if(!b) return;
+          b.image = r.result; markUpdated(b);
+          persist(); render(); pushToCloud();
+        };
+        r.readAsDataURL(f);
+        input.value='';
+      };
+      input.click();
+    }
+
+    /* ---------- Controls ---------- */
+    $('#addBoss').onclick = () => {
+      state.bosses.push({
+        id: uuid(), name:'New Boss', minutes:15, image:'',
+        running:false, endAt:0, lastDurationMs:0, updatedAt: Date.now()
+      });
+      persist(); render();
+    };
+
+    $('#soundToggle').onchange = e => { state.settings.sound = e.target.checked; persist(); };
+    $('#notifyToggle').onchange = e => {
+      state.settings.notify = e.target.checked;
+      if(state.settings.notify && 'Notification' in window && Notification.permission==='default'){ Notification.requestPermission(); }
+      persist();
+    };
+
+    $('#joinRoom').onclick = () => {
+      const id = $('#roomInput').value.trim();
+      if (!id) return alert('Enter a room code');
+      console.log('Joining room', id);
+      setStatus(`(Room: ${id} — connecting...)`);
+      try { connectRoom(id); }
+      catch (err) { console.error('Join room error:', err); setStatus(`(Room: ${id} — error)`, "err"); }
+    };
+
+    $('#leaveRoom').onclick = () => leaveRoom();
+
+    $('#exportBtn').onclick = () => {
+      const blob = new Blob([JSON.stringify(state)],{type:'application/json'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='boss-timers-backup.json'; a.click();
+    };
+    $('#importBtn').onclick = () => $('#importFile').click();
+    $('#importFile').onchange = e => {
+      const f = e.target.files?.[0]; if(!f) return;
+      const r = new FileReader();
+      r.onload = () => { try { const data = JSON.parse(r.result); if(data && data.bosses){ state = data; persist(); render(); } } catch { alert('Invalid file'); } };
+      r.readAsText(f); e.target.value='';
+    };
+    $('#resetAll').onclick = () => { if(confirm('Clear all bosses and settings?')){ state = { bosses:[], settings:{} }; persist(); render(); } };
+
+    /* ---------- Animation/Ticker ---------- */
+    function tick(){ document.querySelectorAll('.card').forEach(c=>c._update && c._update()); requestAnimationFrame(tick); }
+    window.addEventListener('visibilitychange', ()=>{ if(!document.hidden) render(); });
+
+    render();
+    tick();
+  });
+  </script>
+</body>
+</html>
